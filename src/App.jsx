@@ -288,6 +288,7 @@ export default function App() {
   async function releaseSlot(slot) {
     if (!slot.appointment?.id) return;
     await deleteDoc(doc(db, "appointments", slot.appointment.id));
+
     if (inlineEditingKey === `${slot.sessionId}-${slot.start}`) {
       setInlineEditingKey(null);
       setPatientForm({
@@ -413,7 +414,7 @@ export default function App() {
             <div>
               <div className="eyebrow">Cirugía Salamanca</div>
               <h1>Acceso</h1>
-              <p>Introduce la clave de 4 números para entrar.</p>
+              <p>Introduce el PIN de 4 números para entrar.</p>
             </div>
           </section>
 
@@ -624,7 +625,6 @@ export default function App() {
                             className={`slot-card ${
                               slot.occupied ? "slot-card-occupied" : ""
                             }`}
-                            style={{ display: "block" }}
                           >
                             <div className="slot-top-row">
                               <div>
