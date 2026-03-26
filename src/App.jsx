@@ -99,6 +99,28 @@ export default function App() {
     };
   }, []);
 
+  function addPinDigit(d) {
+    if (pinInput.length < 4) setPinInput((p) => p + d);
+  }
+
+  function deletePinDigit() {
+    setPinInput((p) => p.slice(0, -1));
+  }
+
+  function clearPin() {
+    setPinInput("");
+  }
+
+  function handlePinSubmit() {
+    if (pinInput === ACCESS_PIN) {
+      setIsUnlocked(true);
+      setPinError("");
+    } else {
+      setPinError("Clave incorrecta");
+      setPinInput("");
+    }
+  }
+
   const sessionsForDay = sessions.filter(
     (s) =>
       s.professionalId === selectedProfessional && s.date === selectedDate
@@ -122,30 +144,6 @@ export default function App() {
       occupied: map.has(slot.start),
     }));
   });
-
-  function handlePinSubmit(e) {
-    e.preventDefault();
-
-    if (pinInput === ACCESS_PIN) {
-      setIsUnlocked(true);
-      setPinError("");
-    } else {
-      setPinError("Clave incorrecta");
-      setPinInput("");
-    }
-  }
-
-  function addPinDigit(d) {
-    if (pinInput.length < 4) setPinInput((p) => p + d);
-  }
-
-  function deletePinDigit() {
-    setPinInput((p) => p.slice(0, -1));
-  }
-
-  function clearPin() {
-    setPinInput("");
-  }
 
   async function occupySlot(slot) {
     await addDoc(collection(db, "appointments"), {
@@ -175,6 +173,31 @@ export default function App() {
     }
 
     setInlineEditingKey(null);
+  }
+
+  function parseDates(text) {
+    return text
+      .split(",")
+      .map((d) => Number(d.trim()))
+      .filter((n) => !isNaN(n));
+  }
+
+  async function createSessions() {
+    const now = currentMonth;
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+
+    const days = parseDates(sessionForm.datesText);
+
+    for (let day of days) {
+      await addDoc(collection(db, "sessions"), {
+        professionalId: sessionForm.professionalId,
+        date: `${year}-${pad(month)}-${pad(day)}`,
+        startTime: sessionForm.startTime,
+        endTime: sessionForm.endTime,
+        duration: sessionForm.duration,
+      });
+    }
   }
 
   if (!isUnlocked) {
@@ -211,67 +234,107 @@ export default function App() {
   }
 
   return (
-    <div className="app-container">
-      <h1>Cirugía Salamanca</h1>
+    <div className="app-shell">
+      <div className="app-container">
+        <h1>Cirugía Salamanca</h1>
 
-      {!selectedProfessional && (
-        <div>
-          {PROFESSIONALS.map((p) => (
-            <button key={p.id} onClick={() => setSelectedProfessional(p.id)}>
-              {p.label}
+        {!selectedProfessional && (
+          <div className="doctor-list">
+            {PROFESSIONALS.map((p) => (
+              <button key={p.id} onClick={() => setSelectedProfessional(p.id)}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {selectedProfessional && (
+          <>
+            <button onClick={() => setSelectedProfessional(null)}>
+              ← Volver
             </button>
-          ))}
-        </div>
-      )}
 
-      {selectedProfessional && (
-        <>
-          <button onClick={() => setSelectedProfessional(null)}>
-            ← Volver
-          </button>
+            {daySlots.map((slot) => {
+              const key = slot.sessionId + slot.start;
+              const editing = inlineEditingKey === key;
 
-          {daySlots.map((slot) => {
-            const key = slot.sessionId + slot.start;
-            const editing = inlineEditingKey === key;
-
-            return (
-              <div key={key}>
-                {slot.start} - {slot.end}
-
-                {!slot.occupied ? (
-                  <button onClick={() => occupySlot(slot)}>Ocupar</button>
-                ) : (
-                  <button onClick={() => releaseSlot(slot)}>Liberar</button>
-                )}
-
-                <button onClick={() => openForm(slot)}>
-                  Añadir paciente
-                </button>
-
-                {editing && (
+              return (
+                <div key={key} className="slot-card">
                   <div>
-                    <input
-                      placeholder="Nombre"
-                      onChange={(e) =>
-                        setPatientForm({ ...patientForm, firstName: e.target.value })
-                      }
-                    />
-                    <input
-                      placeholder="Apellidos"
-                      onChange={(e) =>
-                        setPatientForm({ ...patientForm, lastName: e.target.value })
-                      }
-                    />
-                    <button onClick={() => savePatient(slot)}>
-                      Guardar
-                    </button>
+                    {slot.start} - {slot.end}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </>
-      )}
+
+                  {!slot.occupied ? (
+                    <button onClick={() => occupySlot(slot)}>
+                      Ocupar hueco
+                    </button>
+                  ) : (
+                    <button onClick={() => releaseSlot(slot)}>
+                      Liberar hueco
+                    </button>
+                  )}
+
+                  <button onClick={() => openForm(slot)}>
+                    Añadir paciente
+                  </button>
+
+                  {editing && (
+                    <div>
+                      <input
+                        placeholder="Nombre"
+                        onChange={(e) =>
+                          setPatientForm({ ...patientForm, firstName: e.target.value })
+                        }
+                      />
+                      <input
+                        placeholder="Apellidos"
+                        onChange={(e) =>
+                          setPatientForm({ ...patientForm, lastName: e.target.value })
+                        }
+                      />
+                      <button onClick={() => savePatient(slot)}>
+                        Guardar
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        <div className="panel">
+          <h2>Configurar días</h2>
+
+          <input
+            placeholder="Ej: 1,7,8"
+            value={sessionForm.datesText}
+            onChange={(e) =>
+              setSessionForm({ ...sessionForm, datesText: e.target.value })
+            }
+          />
+
+          <input
+            type="time"
+            value={sessionForm.startTime}
+            onChange={(e) =>
+              setSessionForm({ ...sessionForm, startTime: e.target.value })
+            }
+          />
+
+          <input
+            type="time"
+            value={sessionForm.endTime}
+            onChange={(e) =>
+              setSessionForm({ ...sessionForm, endTime: e.target.value })
+            }
+          />
+
+          <button onClick={createSessions}>
+            Guardar días
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
