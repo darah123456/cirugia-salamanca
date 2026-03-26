@@ -7,6 +7,7 @@ import {
   onSnapshot,
   updateDoc,
   doc,
+  deleteDoc,
 } from "firebase/firestore";
 
 const PROFESSIONALS = [
@@ -14,6 +15,8 @@ const PROFESSIONALS = [
   { id: "castillo", label: "Doctor del Castillo" },
   { id: "zamora", label: "Consulta Zamora" },
 ];
+
+const ACCESS_PIN = "1111";
 
 function pad(n) {
   return String(n).padStart(2, "0");
@@ -101,8 +104,13 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(todayISO());
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [showAdmin, setShowAdmin] = useState(false);
-  const [editingSlot, setEditingSlot] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [isUnlocked, setIsUnlocked] = useState(() => {
+    return sessionStorage.getItem("cs_unlocked") === "true";
+  });
 
   const [sessionForm, setSessionForm] = useState({
     professionalId: "tocino",
@@ -118,6 +126,8 @@ export default function App() {
     phone: "",
     insuranceCompany: "",
   });
+
+  const [inlineEditingKey, setInlineEditingKey] = useState(null);
 
   useEffect(() => {
     const unsubSessions = onSnapshot(collection(db, "sessions"), (snapshot) => {
@@ -235,15 +245,13 @@ export default function App() {
     const days = parseDates(sessionForm.datesText);
 
     for (const day of days) {
-      const newSession = {
+      await addDoc(collection(db, "sessions"), {
         professionalId: sessionForm.professionalId,
         date: `${year}-${pad(month)}-${pad(day)}`,
         startTime: sessionForm.startTime,
         endTime: sessionForm.endTime,
         duration: Number(sessionForm.duration),
-      };
-
-      await addDoc(collection(db, "sessions"), newSession);
+      });
     }
 
     if (days[0]) {
@@ -251,10 +259,7 @@ export default function App() {
       setSelectedDate(`${year}-${pad(month)}-${pad(days[0])}`);
     }
 
-    setSessionForm((prev) => ({
-      ...prev,
-      datesText: "",
-    }));
+    setSessionForm((prev) => ({ ...prev, datesText: "" }));
   }
 
   async function occupySlot(slot) {
@@ -280,8 +285,22 @@ export default function App() {
     });
   }
 
-  function openPatientForm(slot) {
-    setEditingSlot(slot);
+  async function releaseSlot(slot) {
+    if (!slot.appointment?.id) return;
+    await deleteDoc(doc(db, "appointments", slot.appointment.id));
+    if (inlineEditingKey === `${slot.sessionId}-${slot.start}`) {
+      setInlineEditingKey(null);
+      setPatientForm({
+        firstName: "",
+        lastName: "",
+        phone: "",
+        insuranceCompany: "",
+      });
+    }
+  }
+
+  function openInlinePatientForm(slot) {
+    setInlineEditingKey(`${slot.sessionId}-${slot.start}`);
     setPatientForm({
       firstName: slot.appointment?.firstName || "",
       lastName: slot.appointment?.lastName || "",
@@ -290,12 +309,9 @@ export default function App() {
     });
   }
 
-  async function savePatient() {
-    if (!editingSlot) return;
-
+  async function savePatient(slot) {
     const existing = appointments.find(
-      (a) =>
-        a.sessionId === editingSlot.sessionId && a.slotStart === editingSlot.start
+      (a) => a.sessionId === slot.sessionId && a.slotStart === slot.start
     );
 
     if (existing) {
@@ -308,15 +324,15 @@ export default function App() {
         status: "paciente",
       });
     } else {
-      const session = sessions.find((s) => s.id === editingSlot.sessionId);
+      const session = sessions.find((s) => s.id === slot.sessionId);
       if (!session) return;
 
       await addDoc(collection(db, "appointments"), {
-        sessionId: editingSlot.sessionId,
+        sessionId: slot.sessionId,
         professionalId: session.professionalId,
         date: session.date,
-        slotStart: editingSlot.start,
-        slotEnd: editingSlot.end,
+        slotStart: slot.start,
+        slotEnd: slot.end,
         firstName: patientForm.firstName.trim(),
         lastName: patientForm.lastName.trim(),
         phone: patientForm.phone.trim(),
@@ -325,7 +341,7 @@ export default function App() {
       });
     }
 
-    setEditingSlot(null);
+    setInlineEditingKey(null);
     setPatientForm({
       firstName: "",
       lastName: "",
@@ -348,7 +364,114 @@ export default function App() {
 
   function goHome() {
     setSelectedProfessional(null);
-    setEditingSlot(null);
+    setInlineEditingKey(null);
+  }
+
+  function handlePinSubmit(e) {
+    e.preventDefault();
+
+    if (pinInput === ACCESS_PIN) {
+      setIsUnlocked(true);
+      setPinError("");
+      sessionStorage.setItem("cs_unlocked", "true");
+    } else {
+      setPinError("Clave incorrecta");
+      setPinInput("");
+    }
+  }
+
+  function lockApp() {
+    setIsUnlocked(false);
+    setPinInput("");
+    setPinError("");
+    setSelectedProfessional(null);
+    setInlineEditingKey(null);
+    sessionStorage.removeItem("cs_unlocked");
+  }
+
+  function addPinDigit(digit) {
+    if (pinInput.length >= 4) return;
+    setPinInput((prev) => prev + digit);
+    setPinError("");
+  }
+
+  function clearPin() {
+    setPinInput("");
+    setPinError("");
+  }
+
+  function deletePinDigit() {
+    setPinInput((prev) => prev.slice(0, -1));
+    setPinError("");
+  }
+
+  if (!isUnlocked) {
+    return (
+      <div className="app-shell">
+        <div className="app-container">
+          <section className="hero-card">
+            <div>
+              <div className="eyebrow">Cirugía Salamanca</div>
+              <h1>Acceso</h1>
+              <p>Introduce la clave de 4 números para entrar.</p>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <h2>Clave de acceso</h2>
+              <span className="panel-note">Entrada protegida</span>
+            </div>
+
+            <form onSubmit={handlePinSubmit}>
+              <div className="pin-display">
+                {[0, 1, 2, 3].map((i) => (
+                  <div key={i} className={`pin-dot ${pinInput[i] ? "filled" : ""}`}>
+                    {pinInput[i] ? "•" : ""}
+                  </div>
+                ))}
+              </div>
+
+              {pinError ? <div className="config-help">{pinError}</div> : null}
+
+              <div className="pin-pad">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    className="pin-key"
+                    onClick={() => addPinDigit(String(n))}
+                  >
+                    {n}
+                  </button>
+                ))}
+                <button type="button" className="pin-key pin-key-alt" onClick={clearPin}>
+                  C
+                </button>
+                <button
+                  type="button"
+                  className="pin-key"
+                  onClick={() => addPinDigit("0")}
+                >
+                  0
+                </button>
+                <button
+                  type="button"
+                  className="pin-key pin-key-alt"
+                  onClick={deletePinDigit}
+                >
+                  ⌫
+                </button>
+              </div>
+
+              <button className="primary-btn" type="submit" style={{ marginTop: 14 }}>
+                Entrar
+              </button>
+            </form>
+          </section>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -402,9 +525,14 @@ export default function App() {
                       <h2>{getProfessionalLabel(selectedProfessional)}</h2>
                     </div>
 
-                    <button className="ghost-btn" onClick={goHome}>
-                      ← Volver a pantalla principal
-                    </button>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <button className="ghost-btn" onClick={goHome}>
+                        ← Volver a pantalla principal
+                      </button>
+                      <button className="ghost-btn" onClick={lockApp}>
+                        Cerrar acceso
+                      </button>
+                    </div>
                   </div>
 
                   <div className="calendar-nav">
@@ -430,12 +558,7 @@ export default function App() {
                   <div className="calendar-grid">
                     {calendarDays.map((dateValue, index) => {
                       if (!dateValue) {
-                        return (
-                          <div
-                            key={`empty-${index}`}
-                            className="day-cell empty"
-                          ></div>
-                        );
+                        return <div key={`empty-${index}`} className="day-cell empty"></div>;
                       }
 
                       const status = dateStatusMap.get(dateValue);
@@ -492,132 +615,134 @@ export default function App() {
                           slot.appointment?.lastName || ""
                         }`.trim();
 
+                        const slotKey = `${slot.sessionId}-${slot.start}`;
+                        const isInlineEditing = inlineEditingKey === slotKey;
+
                         return (
                           <div
-                            key={`${slot.sessionId}-${slot.start}`}
+                            key={slotKey}
                             className={`slot-card ${
                               slot.occupied ? "slot-card-occupied" : ""
                             }`}
+                            style={{ display: "block" }}
                           >
-                            <div>
-                              <div className="slot-time">
-                                {slot.start} - {slot.end}
+                            <div className="slot-top-row">
+                              <div>
+                                <div className="slot-time">
+                                  {slot.start} - {slot.end}
+                                </div>
+                                <div className="slot-status">
+                                  {slot.occupied ? "Ocupado" : "Disponible"}
+                                </div>
+                                {patientName ? (
+                                  <div className="patient-name">{patientName}</div>
+                                ) : null}
                               </div>
-                              <div className="slot-status">
-                                {slot.occupied ? "Ocupado" : "Disponible"}
-                              </div>
-                              {patientName ? (
-                                <div className="patient-name">{patientName}</div>
-                              ) : null}
-                            </div>
 
-                            <div className="slot-actions-inline">
-                              {!slot.occupied ? (
+                              <div className="slot-actions-inline">
+                                {!slot.occupied ? (
+                                  <button
+                                    className="slot-btn"
+                                    onClick={() => occupySlot(slot)}
+                                  >
+                                    Ocupar hueco
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="slot-btn occupied-btn"
+                                    onClick={() => releaseSlot(slot)}
+                                  >
+                                    Liberar hueco
+                                  </button>
+                                )}
+
                                 <button
-                                  className="slot-btn"
-                                  onClick={() => occupySlot(slot)}
+                                  className="secondary-slot-btn"
+                                  onClick={() => openInlinePatientForm(slot)}
                                 >
-                                  Ocupar hueco
+                                  {patientName ? "Editar paciente" : "Añadir paciente"}
                                 </button>
-                              ) : (
-                                <button className="slot-btn occupied-btn" disabled>
-                                  Ocupado
-                                </button>
-                              )}
-
-                              <button
-                                className="secondary-slot-btn"
-                                onClick={() => openPatientForm(slot)}
-                              >
-                                {patientName ? "Editar paciente" : "Añadir paciente"}
-                              </button>
+                              </div>
                             </div>
+
+                            {isInlineEditing && (
+                              <div className="inline-patient-form">
+                                <div className="form-grid">
+                                  <label>
+                                    <span>Nombre</span>
+                                    <input
+                                      value={patientForm.firstName}
+                                      onChange={(e) =>
+                                        setPatientForm((prev) => ({
+                                          ...prev,
+                                          firstName: e.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </label>
+
+                                  <label>
+                                    <span>Apellidos</span>
+                                    <input
+                                      value={patientForm.lastName}
+                                      onChange={(e) =>
+                                        setPatientForm((prev) => ({
+                                          ...prev,
+                                          lastName: e.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </label>
+
+                                  <label>
+                                    <span>Teléfono</span>
+                                    <input
+                                      value={patientForm.phone}
+                                      onChange={(e) =>
+                                        setPatientForm((prev) => ({
+                                          ...prev,
+                                          phone: e.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </label>
+
+                                  <label>
+                                    <span>Compañía</span>
+                                    <input
+                                      value={patientForm.insuranceCompany}
+                                      onChange={(e) =>
+                                        setPatientForm((prev) => ({
+                                          ...prev,
+                                          insuranceCompany: e.target.value,
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                </div>
+
+                                <div className="form-actions">
+                                  <button
+                                    className="ghost-btn"
+                                    onClick={() => setInlineEditingKey(null)}
+                                  >
+                                    Cancelar
+                                  </button>
+                                  <button
+                                    className="primary-btn small-primary"
+                                    onClick={() => savePatient(slot)}
+                                  >
+                                    Guardar paciente
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                     </div>
                   )}
                 </section>
-
-                {editingSlot && (
-                  <section className="panel">
-                    <div className="panel-header">
-                      <h2>Paciente</h2>
-                      <span className="panel-note">
-                        {editingSlot.start} - {editingSlot.end}
-                      </span>
-                    </div>
-
-                    <div className="form-grid">
-                      <label>
-                        <span>Nombre</span>
-                        <input
-                          value={patientForm.firstName}
-                          onChange={(e) =>
-                            setPatientForm((prev) => ({
-                              ...prev,
-                              firstName: e.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-
-                      <label>
-                        <span>Apellidos</span>
-                        <input
-                          value={patientForm.lastName}
-                          onChange={(e) =>
-                            setPatientForm((prev) => ({
-                              ...prev,
-                              lastName: e.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-
-                      <label>
-                        <span>Teléfono</span>
-                        <input
-                          value={patientForm.phone}
-                          onChange={(e) =>
-                            setPatientForm((prev) => ({
-                              ...prev,
-                              phone: e.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-
-                      <label>
-                        <span>Compañía</span>
-                        <input
-                          value={patientForm.insuranceCompany}
-                          onChange={(e) =>
-                            setPatientForm((prev) => ({
-                              ...prev,
-                              insuranceCompany: e.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="form-actions">
-                      <button
-                        className="ghost-btn"
-                        onClick={() => setEditingSlot(null)}
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        className="primary-btn small-primary"
-                        onClick={savePatient}
-                      >
-                        Guardar paciente
-                      </button>
-                    </div>
-                  </section>
-                )}
               </>
             )}
 
